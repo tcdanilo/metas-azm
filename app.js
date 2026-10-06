@@ -27,7 +27,8 @@ const ui = {
   msg: null, msgErro: false, salvando: false,
   email: '', authMsg: erroLink ? (/expired|expirou/i.test(erroLink) ? 'O link expirou ou já foi usado. Peça um novo em "Esqueci minha senha".' : 'O link não é válido. Peça um novo em "Esqueci minha senha".') : null,
   authErro: !!erroLink, enviando: false, trocaVoluntaria: false,
-  falhas: 0, bloqueadoAte: 0
+  falhas: 0, bloqueadoAte: 0,
+  pagina: 'metas', colabForm: null, colabExcluir: null, colabBusca: ''
 };
 
 /* ---------- formatação ---------- */
@@ -79,17 +80,18 @@ function render() {
   const E = estadoAtivo();
   const fechado = triFechado();
   let h = `<header class="topo"><div class="marca"><small>Supermercados AZM · ${S.ano}</small><h1>Metas trimestrais</h1></div>
+    <nav class="paginas" aria-label="Seções">${[['metas', 'Metas'], ['colab', 'Colaboradores']].map(([k, n]) => `<button data-acao="pagina" data-pag="${k}" aria-current="${ui.pagina === k ? 'page' : 'false'}" ${ui.editando ? 'disabled' : ''}>${n}</button>`).join('')}</nav>
     <nav class="tris" aria-label="Trimestre">${[1, 2, 3, 4].map(t => `<button data-acao="tri" data-tri="${t}" aria-pressed="${t === ui.tri}" ${ui.editando ? 'disabled' : ''}>${t}º tri</button>`).join('')}</nav></header>`;
   const ms = mesesDoTri(ui.tri);
   h += `<div class="faixa"><div class="faixa-info"><span class="chip ${fechado ? 'fechado' : 'aberto'}">${triSemPremio() ? 'Sem prêmio · só acompanhamento' : fechado ? 'Fechado · resultado final' : 'Em andamento · resultado parcial'}</span>
     <span>${MESES_LONGOS[ms[0] - 1]} a ${MESES_LONGOS[ms[2] - 1].toLowerCase()} de ${S.ano}</span></div>`;
-  if (podeEditar && !ui.equipe && !ui.editando) {
+  if (podeEditar && !ui.equipe && !ui.editando && ui.pagina === 'metas') {
     h += `<div class="acoes">${fechado ? `<button class="btn" data-acao="pedir-reabrir">Reabrir trimestre</button>` : `<button class="btn prim" data-acao="pedir-fechar">Fechar ${ui.tri}º trimestre</button>`}</div>`;
   }
   h += `</div>`;
   if (ui.msg) h += `<p class="aviso ${ui.msgErro ? 'erro' : ''}" role="status">${esc(ui.msg)}</p>`;
   if (ui.confirmar) h += confirmacaoHTML();
-  h += ui.equipe ? detalheHTML(E) : resumoHTML(E);
+  h += ui.pagina === 'colab' ? colabPaginaHTML(E) : ui.equipe ? detalheHTML(E) : resumoHTML(E);
   h += rodapeHTML();
   app.innerHTML = h;
 }
@@ -105,13 +107,16 @@ function confirmacaoHTML() {
 function resumoHTML(E) {
   const fechado = triFechado();
   const res = equipes(E).map(eq => resultadoEquipe(E, eq, E.ano, ui.tri));
-  const total = res.reduce((a, r) => a + r.premio, 0), pot = res.reduce((a, r) => a + r.potencial, 0);
+  const nCol = r => colabDaEquipe(r.eq.nome).length;
+  const totalPagar = res.reduce((a, r) => a + r.premio * nCol(r), 0);
+  const pessoas = res.reduce((a, r) => a + nCol(r), 0);
+  const semGente = res.filter(r => r.temMeta && !nCol(r)).length;
   let ok = 0, aval = 0;
   res.forEach(r => r.progs.forEach(p => { p.meses.forEach(m => m.itens.forEach(x => { if (x.st === 'ok') ok++; if (x.st === 'ok' || x.st === 'nao') aval++; })); p.tris.forEach(t => { if (t.st === 'ok') ok++; if (t.st === 'ok' || t.st === 'nao') aval++; }); }));
   const ms = mesesDoTri(ui.tri);
   const lanc = ms.map((m, i) => { const ps = res.flatMap(r => r.progs).filter(p => p.meses[i].temMeta); return { m, n: ps.filter(p => p.meses[i].lancado).length, t: ps.length }; });
   let h = `<section class="totais">
-    ${triSemPremio() ? `<div class="total"><span>Prêmios</span><b>Sem prêmio</b><em>As metas com prêmio começaram no 3º trimestre</em></div>` : `<div class="total"><span>${fechado ? 'Prêmios pagos no trimestre' : 'Prêmios previstos até agora'}</span><b class="num">${brl(total)}</b><em>de ${brl(pot)} possíveis</em></div>`}
+    ${triSemPremio() ? `<div class="total"><span>Prêmios</span><b>Sem prêmio</b><em>As metas com prêmio começaram no 3º trimestre</em></div>` : `<div class="total"><span>${fechado ? 'Total pago no trimestre' : 'Total a pagar até agora'}</span><b class="num">${brl(totalPagar)}</b><em>${colabErro ? 'Cadastre os colaboradores para ver o total' : pessoas + (pessoas === 1 ? ' colaborador' : ' colaboradores') + (semGente ? ' · ' + semGente + (semGente === 1 ? ' meta sem colaborador' : ' metas sem colaborador') : '')}</em></div>`}
     <div class="total"><span>Metas batidas</span><b class="num">${ok} de ${aval}</b><em>${aval ? nf(ok / aval * 100, 0, 0) + '% das metas já apuradas' : 'Nenhuma meta apurada ainda'}</em></div>
     <div class="total"><span>Lançamento dos meses</span><b class="num">${lanc.filter(l => l.t && l.n === l.t).length} de 3</b><em>${lanc.map(l => `${MESES[l.m - 1]} ${l.t ? l.n + '/' + l.t : '—'}`).join(' · ')}</em></div></section>`;
   h += `<div class="sec-tit"><h2>Equipes</h2><div class="legenda"><span><i class="dot ok"></i>batida</span><span><i class="dot nao"></i>não batida</span><span><i class="dot"></i>aguardando</span><span><i class="dot sem"></i>sem meta</span></div></div>`;
@@ -122,7 +127,7 @@ function resumoHTML(E) {
 
 function cardHTML(r) {
   const ms = mesesDoTri(ui.tri);
-  let h = `<button class="card" data-acao="abrir" data-eq="${esc(r.eq.nome)}"><div class="card-top"><div><h3>${esc(r.eq.nome)}</h3><p>${esc(lojasDe(r.eq))}${r.temMeta ? '' : ' · metas ainda não cadastradas'}</p></div>${etq(r.premio, 'm')}</div>
+  let h = `<button class="card" data-acao="abrir" data-eq="${esc(r.eq.nome)}"><div class="card-top"><div><h3>${esc(r.eq.nome)}</h3><p>${esc(lojasDe(r.eq))}${r.temMeta ? '' : ' · metas ainda não cadastradas'}</p></div><div class="card-premio">${etq(r.premio, 'm')}${triSemPremio() ? '' : `<small>por pessoa · ${colabDaEquipe(r.eq.nome).length} ${colabDaEquipe(r.eq.nome).length === 1 ? 'pessoa' : 'pessoas'}</small>`}</div></div>
     <div class="linhas"><div class="linha cab"><span></span>${ms.map(m => `<span>${MESES[m - 1]}</span>`).join('')}</div>`;
   r.progs.forEach(p => {
     const mensais = p.prog.indicadores.some(i => i.periodo !== 'tri');
@@ -145,9 +150,10 @@ function detalheHTML(E) {
   const r = resultadoEquipe(E, eq, E.ano, ui.tri);
   const fechado = triFechado();
   let h = `<button class="voltar" data-acao="voltar" ${ui.editando ? 'disabled' : ''}>← Todas as equipes</button>
-    <div class="det-top"><div><h2>${esc(eq.nome)}</h2><p class="aviso">${esc(lojasDe(eq))} · ${fechado ? 'prêmio final' : 'prêmio previsto'} do ${ui.tri}º trimestre</p></div>
+    <div class="det-top"><div><h2>${esc(eq.nome)}</h2><p class="aviso">${esc(lojasDe(eq))} · ${fechado ? 'prêmio final' : 'prêmio previsto'} por pessoa no ${ui.tri}º trimestre</p></div>
     <div class="acoes"><span id="tot-eq">${etq(r.premio, 'g')}</span>${podeEditar && !ui.editando && !fechado ? `<button class="btn prim" data-acao="editar">Lançar resultados e metas</button>` : ''}</div></div>`;
   if (podeEditar && fechado && !ui.editando) h += `<p class="aviso">Trimestre fechado. Para corrigir um lançamento, reabra o trimestre na tela inicial.</p>`;
+  if (!ui.editando) h += colabNaEquipeHTML(eq.nome, r.premio);
   r.progs.forEach(p => { h += programaHTML(E, p); });
   if (ui.editando) {
     h += `<div class="barra-ed"><span class="aviso" id="aviso-ed">Digite metas e realizados. Percentuais em número: 28,9 para 28,9%.</span>
@@ -299,6 +305,7 @@ function irPara(tela, msg, erro) { ui.tela = tela; ui.authMsg = msg || null; ui.
 function limparDados() {
   S = null; versao = null; atualizadoEm = null; atualizadoPor = null; papel = null; podeEditar = false; erroCarga = null;
   ui.editando = false; ui.rascunho = null; ui.confirmar = null; ui.msg = null; ui.equipe = null;
+  COLAB = []; colabErro = null; ui.colabForm = null; ui.colabExcluir = null; ui.pagina = 'metas';
 }
 
 /* Decide a tela a partir da sessão: sem sessão → login; sessão sem permissão → aviso; com permissão → metas */
@@ -315,6 +322,7 @@ async function atualizarAcesso() {
   papel = podeEditar ? 'lancamento' : 'leitura';
   ui.tela = 'app';
   if (!S) await carregar(); else render();
+  if (S) carregarColab();
 }
 
 async function carregar() {
@@ -397,10 +405,24 @@ app.addEventListener('click', ev => {
   else if (a === 'sair') { ui.authMsg = null; sb.auth.signOut(); }
   else if (a === 'recarregar') { erroCarga = null; atualizarAcesso(); }
   else if (a === 'backup') { baixarBackup(); }
+  else if (a === 'pagina') { ui.pagina = b.dataset.pag; ui.equipe = null; ui.msg = null; ui.confirmar = null; render(); window.scrollTo(0, 0); }
+  else if (a === 'colab-novo' && podeEditar) { ui.colabForm = { ativo: true }; ui.colabExcluir = null; ui.msg = null; render(); const el = document.getElementById('c-nome'); if (el) el.focus(); }
+  else if (a === 'colab-editar' && podeEditar) { const c = COLAB.find(x => x.id === b.dataset.id); if (c) { ui.colabForm = Object.assign({}, c); ui.colabExcluir = null; ui.msg = null; render(); window.scrollTo(0, 0); } }
+  else if (a === 'colab-cancelar') { ui.colabForm = null; render(); }
+  else if (a === 'colab-ativo' && podeEditar) { const c = COLAB.find(x => x.id === b.dataset.id); if (c) alterarColab(c.id, { ativo: !c.ativo }, c.ativo ? c.nome + ' desativado: não recebe mais o prêmio.' : c.nome + ' reativado.'); }
+  else if (a === 'colab-pedir-excluir') { ui.colabExcluir = b.dataset.id; ui.colabForm = null; render(); window.scrollTo(0, 0); }
+  else if (a === 'colab-cancelar-excluir') { ui.colabExcluir = null; render(); }
+  else if (a === 'colab-excluir' && podeEditar) { excluirColab(b.dataset.id); }
 });
 
 app.addEventListener('input', ev => {
   const el = ev.target;
+  if (el.id === 'c-cpf') { el.value = fmtCpf(el.value); return; }
+  if (el.id === 'c-cel') { el.value = fmtCel(el.value); return; }
+  if (el.id === 'c-busca') {
+    ui.colabBusca = el.value; const pos = el.selectionStart; render();
+    const n = document.getElementById('c-busca'); if (n) { n.focus(); n.setSelectionRange(pos, pos); } return;
+  }
   if (!ui.editando || !ui.rascunho) return;
   const R = ui.rascunho;
   if (el.dataset.campo) {
@@ -432,6 +454,8 @@ app.addEventListener('change', ev => {
 app.addEventListener('submit', async ev => {
   ev.preventDefault();
   const f = ev.target.id;
+
+  if (f === 'form-colab') { if (podeEditar) salvarColab(lerFormColab()); return; }
 
   if (f === 'form-login') {
     if (Date.now() < ui.bloqueadoAte) return;
