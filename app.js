@@ -1,12 +1,34 @@
-/* ===== Interface ===== */
+/* ===== Metas Trimestrais AZM ===== */
+'use strict';
+
+/* Impede que o site seja aberto dentro de outro site (clickjacking) */
+if (window.top !== window.self) { try { window.top.location = window.self.location.href; } catch (e) { document.documentElement.innerHTML = ''; } }
+
 const CFG = window.METAS_CONFIG || {};
-const sb = (window.supabase && CFG.supabaseUrl && CFG.supabaseAnonKey) ? window.supabase.createClient(CFG.supabaseUrl, CFG.supabaseAnonKey) : null;
+const INATIVIDADE_MIN = 30;                  // sai sozinho depois de 30 minutos sem uso
+const SENHA_MIN = 8;
+
+/* O link do e-mail de "esqueci a senha" chega com #...type=recovery; guardamos antes do Supabase limpar a URL */
+const HASH_INICIAL = window.location.hash || '';
+let emRecuperacao = /type=recovery/.test(HASH_INICIAL);
+const erroLink = /error_code=|error=/.test(HASH_INICIAL) ? (decodeURIComponent((HASH_INICIAL.match(/error_description=([^&]*)/) || [])[1] || '').replace(/\+/g, ' ') || 'link inválido') : null;
+
+const sb = (window.supabase && CFG.supabaseUrl && CFG.supabaseAnonKey)
+  ? window.supabase.createClient(CFG.supabaseUrl, CFG.supabaseAnonKey, { auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true } })
+  : null;
 const app = document.getElementById('app');
 
 let S = null, versao = null, atualizadoEm = null, atualizadoPor = null, erroCarga = null;
-let podeEditar = false, sessao = null;
+let podeEditar = false, papel = null, sessao = null;
 const hoje = new Date();
-const ui = { tri: Math.ceil((hoje.getMonth() + 1) / 3), equipe: null, editando: false, rascunho: null, confirmar: null, msg: null, msgErro: false, salvando: false, login: false, entrando: false, loginErro: null };
+const ui = {
+  tela: 'carregando',            // carregando | login | esqueci | nova-senha | sem-acesso | app
+  tri: Math.ceil((hoje.getMonth() + 1) / 3), equipe: null, editando: false, rascunho: null, confirmar: null,
+  msg: null, msgErro: false, salvando: false,
+  email: '', authMsg: erroLink ? (/expired|expirou/i.test(erroLink) ? 'O link expirou ou já foi usado. Peça um novo em "Esqueci minha senha".' : 'O link não é válido. Peça um novo em "Esqueci minha senha".') : null,
+  authErro: !!erroLink, enviando: false, trocaVoluntaria: false,
+  falhas: 0, bloqueadoAte: 0
+};
 
 /* ---------- formatação ---------- */
 const nf = (v, min, max) => v.toLocaleString('pt-BR', { minimumFractionDigits: min, maximumFractionDigits: max });
@@ -17,7 +39,7 @@ function fmt(v, tipo) {
   return nf(v, 0, 0);
 }
 function brl(v) { return 'R$ ' + nf(v, 0, 2); }
-function etq(v, cls) { if (triSemPremio()) return `<span class="etq ${cls || ''} zero" style="font-size:15px">sem prêmio</span>`; return `<span class="etq ${cls || ''} ${v ? '' : 'zero'}"><small>R$</small>${nf(v, 0, 2)}</span>`; }
+function etq(v, cls) { if (triSemPremio()) return `<span class="etq ${cls || ''} zero etq-txt">sem prêmio</span>`; return `<span class="etq ${cls || ''} ${v ? '' : 'zero'}"><small>R$</small>${nf(v, 0, 2)}</span>`; }
 function difTexto(ind, real, meta) {
   if (!isNum(real) || !isNum(meta)) return '';
   if (ind.tipo === 'pct' || ind.tipo === 'razao') { const d = (real - meta) * 100; return (d >= 0 ? '+' : '−') + nf(Math.abs(d), 0, 2) + ' p.p.'; }
@@ -53,7 +75,7 @@ function triFechado() { return !!(S.trimestres[triChave()] && S.trimestres[triCh
 
 /* ---------- render ---------- */
 function render() {
-  if (!S) { app.innerHTML = cargaHTML(); return; }
+  if (ui.tela !== 'app' || !S) { app.innerHTML = telaAcessoHTML(); focarPrimeiroCampo(); return; }
   const E = estadoAtivo();
   const fechado = triFechado();
   let h = `<header class="topo"><div class="marca"><small>Supermercados AZM · ${S.ano}</small><h1>Metas trimestrais</h1></div>
@@ -69,9 +91,7 @@ function render() {
   if (ui.confirmar) h += confirmacaoHTML();
   h += ui.equipe ? detalheHTML(E) : resumoHTML(E);
   h += rodapeHTML();
-  const foco = document.activeElement && document.activeElement.id;
   app.innerHTML = h;
-  if (foco && ui.login) { const el = document.getElementById(foco); if (el) el.focus(); }
 }
 
 function confirmacaoHTML() {
@@ -113,7 +133,7 @@ function cardHTML(r) {
       }).join('')}</div>`;
     }
     p.tris.forEach(t => {
-      h += `<div class="linha tri"><span class="lj">C × V</span><div class="tri-cell"><span>Média ${fmt(t.real, 'razao')} · meta ${fmt(t.meta, 'razao')}</span><span class="pill ${t.st}" style="margin:0">${t.parcial ? 'Parcial' : ROTULO_ST[t.st]}</span></div></div>`;
+      h += `<div class="linha tri"><span class="lj">C × V</span><div class="tri-cell"><span>Média ${fmt(t.real, 'razao')} · meta ${fmt(t.meta, 'razao')}</span><span class="pill nm ${t.st}">${t.parcial ? 'Parcial' : ROTULO_ST[t.st]}</span></div></div>`;
     });
   });
   return h + `</div></button>`;
@@ -195,7 +215,7 @@ function totMesHTML(m) {
   return `${etq(m.premio, 'm')}<span class="obs">${obs}</span>`;
 }
 function totTriHTML(t) {
-  return `<div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap">${etq(t.premio, 'm')}<span>Média ${fmt(t.real, 'razao')} contra meta de ${fmt(t.meta, 'razao')}</span><span class="pill ${t.st}" style="margin:0">${t.parcial ? 'Parcial: faltam meses' : ROTULO_ST[t.st]}</span></div>`;
+  return `<div class="tri-res">${etq(t.premio, 'm')}<span>Média ${fmt(t.real, 'razao')} contra meta de ${fmt(t.meta, 'razao')}</span><span class="pill nm ${t.st}">${t.parcial ? 'Parcial: faltam meses' : ROTULO_ST[t.st]}</span></div>`;
 }
 
 /* atualiza totais durante a edição sem redesenhar os campos */
@@ -213,64 +233,140 @@ function atualizarTotais() {
   });
 }
 
-/* ---------- carga, login e salvamento (Supabase) ---------- */
-function cargaHTML() {
-  const msg = erroCarga || 'Carregando metas…';
-  return `<header class="topo"><div class="marca"><small>Supermercados AZM</small><h1>Metas trimestrais</h1></div></header>
-    <div class="vazio"><p class="aviso ${erroCarga ? 'erro' : ''}">${esc(msg)}</p>${erroCarga ? '<button class="btn" data-acao="recarregar">Tentar de novo</button>' : ''}</div>`;
+/* ---------- telas de acesso ---------- */
+const MARCA = `<div class="ac-marca"><span class="ac-logo" aria-hidden="true">AZM</span><div><small>Supermercados AZM</small><b>Metas trimestrais</b></div></div>`;
+
+function avisoAuth() {
+  return ui.authMsg ? `<p class="aviso ${ui.authErro ? 'erro' : 'ok'}" role="${ui.authErro ? 'alert' : 'status'}">${esc(ui.authMsg)}</p>` : '';
+}
+
+function telaAcessoHTML() {
+  if (!sb) return `<main class="acesso"><div class="ac-card">${MARCA}<p class="aviso erro">O site ainda não foi configurado (faltam os dados do Supabase em config.js).</p></div></main>`;
+  const t = ui.tela;
+  let corpo = '';
+  if (t === 'carregando' || (t === 'app' && !S)) {
+    corpo = erroCarga
+      ? `<p class="aviso erro" role="alert">${esc(erroCarga)}</p><div class="acoes"><button class="btn prim" data-acao="recarregar">Tentar de novo</button><button class="btn" data-acao="sair">Sair</button></div>`
+      : `<p class="aviso">Carregando…</p>`;
+  } else if (t === 'login') {
+    const bloqueado = Date.now() < ui.bloqueadoAte;
+    corpo = `<h1>Entrar</h1><p class="aviso">Acesso restrito à equipe do Supermercados AZM. Esqueceu a senha? Fale com a administração.</p>${avisoAuth()}
+      <form id="form-login" class="ac-form" novalidate>
+        <label for="l-email">E-mail</label><input id="l-email" type="email" autocomplete="username" inputmode="email" required maxlength="254" value="${esc(ui.email)}">
+        <label for="l-senha">Senha</label><input id="l-senha" type="password" autocomplete="current-password" required maxlength="128">
+        <button type="submit" class="btn prim largo" ${ui.enviando || bloqueado ? 'disabled' : ''}>${ui.enviando ? 'Entrando…' : bloqueado ? 'Aguarde alguns segundos' : 'Entrar'}</button>
+      </form>`;
+  } else if (t === 'esqueci') {
+    corpo = `<h1>Esqueci minha senha</h1><p class="aviso">Digite o e-mail que você usa para entrar. Vamos enviar um link para você criar uma senha nova.</p>${avisoAuth()}
+      <form id="form-esqueci" class="ac-form" novalidate>
+        <label for="e-email">E-mail</label><input id="e-email" type="email" autocomplete="username" inputmode="email" required maxlength="254" value="${esc(ui.email)}">
+        <button type="submit" class="btn prim largo" ${ui.enviando ? 'disabled' : ''}>${ui.enviando ? 'Enviando…' : 'Enviar link'}</button>
+      </form>
+      <button class="link" data-acao="ir-login">← Voltar para o login</button>`;
+  } else if (t === 'nova-senha') {
+    corpo = `<h1>${ui.trocaVoluntaria ? 'Trocar senha' : 'Criar nova senha'}</h1>
+      <p class="aviso">${sessao ? 'Conta: ' + esc(sessao.user.email) + '. ' : ''}Use pelo menos ${SENHA_MIN} caracteres, com letras e números.</p>${avisoAuth()}
+      <form id="form-senha" class="ac-form" novalidate>
+        <label for="n-senha">Nova senha</label><input id="n-senha" type="password" autocomplete="new-password" required minlength="${SENHA_MIN}" maxlength="128">
+        <label for="n-conf">Repita a nova senha</label><input id="n-conf" type="password" autocomplete="new-password" required minlength="${SENHA_MIN}" maxlength="128">
+        <button type="submit" class="btn prim largo" ${ui.enviando ? 'disabled' : ''}>${ui.enviando ? 'Salvando…' : 'Salvar nova senha'}</button>
+      </form>
+      ${ui.trocaVoluntaria ? '<button class="link" data-acao="cancelar-troca">← Voltar para as metas</button>' : ''}`;
+  } else if (t === 'sem-acesso') {
+    corpo = `<h1>Acesso não liberado</h1>
+      <p class="aviso">A conta <b>${esc(sessao ? sessao.user.email : '')}</b> entrou, mas ainda não tem permissão para ver as metas. Peça para a administração liberar o seu e-mail.</p>
+      <div class="acoes"><button class="btn" data-acao="sair">Sair</button></div>`;
+  }
+  return `<main class="acesso"><div class="ac-card">${MARCA}${corpo}</div></main>`;
+}
+
+function focarPrimeiroCampo() {
+  const el = app.querySelector('.ac-form input:not([value]), .ac-form input[value=""], .ac-form input[type=password]');
+  if (el && document.activeElement === document.body) el.focus();
 }
 
 function rodapeHTML() {
-  const quando = atualizadoEm ? 'Atualizado em ' + new Date(atualizadoEm).toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' }) : 'Dados carregados das planilhas de metas 2026';
-  let h = `<footer class="rodape"><span>${esc(quando)}</span><span>`;
-  if (sessao) h += `${esc(sessao.user.email)}${podeEditar ? '' : ' (sem permissão para lançar)'} · <button class="voltar" data-acao="sair">Sair</button>`;
-  else if (!ui.login) h += `Somente a administração lança resultados. <button class="voltar" data-acao="abrir-login">Entrar</button>`;
-  h += `</span></footer>`;
-  if (!sessao && ui.login) {
-    h += `<form class="login" id="form-login" novalidate><h3>Entrar para lançar</h3>
-      <label for="l-email">E-mail</label><input id="l-email" type="email" autocomplete="username" required value="${esc(ui.email || '')}">
-      <label for="l-senha">Senha</label><input id="l-senha" type="password" autocomplete="current-password" required>
-      ${ui.loginErro ? `<p class="aviso erro">${esc(ui.loginErro)}</p>` : ''}
-      <div class="acoes"><button type="button" class="btn" data-acao="fechar-login">Cancelar</button><button type="submit" class="btn prim" ${ui.entrando ? 'disabled' : ''}>${ui.entrando ? 'Entrando…' : 'Entrar'}</button></div></form>`;
+  const quando = atualizadoEm ? 'Atualizado em ' + new Date(atualizadoEm).toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' }) + (atualizadoPor ? ' por ' + atualizadoPor : '') : '';
+  return `<footer class="rodape"><span>${esc(quando)}</span><span class="rod-conta">
+    ${esc(sessao ? sessao.user.email : '')} · ${podeEditar ? 'pode lançar' : 'somente leitura'}
+    ${podeEditar ? '<button class="link" data-acao="backup">Baixar backup</button>' : ''}
+    <button class="link" data-acao="trocar-senha">Trocar senha</button>
+    <button class="link" data-acao="sair">Sair</button></span></footer>`;
+}
+
+function irPara(tela, msg, erro) { ui.tela = tela; ui.authMsg = msg || null; ui.authErro = !!erro; ui.enviando = false; render(); }
+
+function limparDados() {
+  S = null; versao = null; atualizadoEm = null; atualizadoPor = null; papel = null; podeEditar = false; erroCarga = null;
+  ui.editando = false; ui.rascunho = null; ui.confirmar = null; ui.msg = null; ui.equipe = null;
+}
+
+/* Decide a tela a partir da sessão: sem sessão → login; sessão sem permissão → aviso; com permissão → metas */
+async function atualizarAcesso() {
+  if (!sessao) {
+    limparDados();
+    if (ui.tela !== 'esqueci') irPara('login', ui.authMsg, ui.authErro);
+    return;
   }
-  return h;
+  if (emRecuperacao) { irPara('nova-senha'); return; }
+  if (ui.tela === 'nova-senha') return;
+  const { data } = await sb.rpc('is_admin');
+  podeEditar = data === true;
+  papel = podeEditar ? 'lancamento' : 'leitura';
+  ui.tela = 'app';
+  if (!S) await carregar(); else render();
 }
 
 async function carregar() {
-  if (!sb) { erroCarga = 'O site ainda não foi configurado (faltam os dados do Supabase em config.js).'; render(); return; }
+  erroCarga = null; render();
   const { data, error } = await sb.from('estado').select('dados, versao, atualizado_em, atualizado_por').eq('id', 1).maybeSingle();
   if (error || !data) { erroCarga = 'Não foi possível carregar as metas. Verifique a internet e tente de novo.'; render(); return; }
-  S = data.dados; versao = data.versao; atualizadoEm = data.atualizado_em; atualizadoPor = data.atualizado_por; erroCarga = null;
-  render();
-}
-
-async function verificarAdmin() {
-  podeEditar = false;
-  if (sb && sessao) {
-    const { data } = await sb.rpc('is_admin');
-    podeEditar = data === true;
-  }
-  if (!podeEditar) { ui.editando = false; ui.rascunho = null; ui.confirmar = null; }
+  S = data.dados; versao = data.versao; atualizadoEm = data.atualizado_em; atualizadoPor = data.atualizado_por;
   render();
 }
 
 async function salvar(E, msgOk) {
-  if (!sb || !podeEditar) { mostrar('Entre com a conta de administração para salvar.', true); return; }
+  if (!podeEditar) { mostrar('Sua conta não tem permissão para lançar.', true); return; }
   ui.salvando = true; render();
   const { data, error } = await sb.from('estado').update({ dados: E }).eq('id', 1).eq('versao', versao).select('versao, atualizado_em, atualizado_por');
   ui.salvando = false;
   if (error) {
-    if (error.code === 'PGRST301' || /JWT/i.test(error.message || '')) { mostrar('Sua sessão expirou. Entre de novo para salvar; seus números continuam na tela.', true); sessao = null; podeEditar = false; return; }
+    if (error.code === 'PGRST301' || /JWT/i.test(error.message || '')) { mostrar('Sua sessão expirou. Saia e entre de novo; anote os números antes, se precisar.', true); return; }
     mostrar('Não foi possível salvar agora. Tente de novo em instantes; seus números continuam na tela.', true); return;
   }
   if (!data || !data.length) {
-    mostrar('Os dados foram alterados em outro aparelho desde que você abriu a página. Recarregue a página e refaça o lançamento.', true); return;
+    mostrar('Os dados foram alterados por outra pessoa desde que você abriu a página. Recarregue a página e refaça o lançamento.', true); return;
   }
   S = E; versao = data[0].versao; atualizadoEm = data[0].atualizado_em; atualizadoPor = data[0].atualizado_por;
   ui.editando = false; ui.rascunho = null; ui.confirmar = null;
   mostrar(msgOk, false);
 }
 function mostrar(msg, erro) { ui.msg = msg; ui.msgErro = !!erro; render(); }
+
+function baixarBackup() {
+  const blob = new Blob([JSON.stringify({ exportadoEm: new Date().toISOString(), versao, dados: S }, null, 2)], { type: 'application/json' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'backup-metas-azm-' + new Date().toISOString().slice(0, 10) + '.json';
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+}
+
+function senhaFraca(s) {
+  if (s.length < SENHA_MIN) return `A senha precisa ter pelo menos ${SENHA_MIN} caracteres.`;
+  if (!/[A-Za-z]/.test(s) || !/\d/.test(s)) return 'Use letras e números na senha.';
+  return null;
+}
+
+/* ---------- saída automática por inatividade ---------- */
+let ultimaAtividade = Date.now();
+['click', 'keydown', 'pointermove', 'touchstart', 'scroll'].forEach(ev => window.addEventListener(ev, () => { ultimaAtividade = Date.now(); }, { passive: true }));
+setInterval(() => {
+  if (sessao && Date.now() - ultimaAtividade > INATIVIDADE_MIN * 60000) {
+    ui.authMsg = 'Você saiu automaticamente depois de ' + INATIVIDADE_MIN + ' minutos sem uso.'; ui.authErro = false;
+    sb.auth.signOut();
+  }
+}, 30000);
 
 /* ---------- eventos ---------- */
 app.addEventListener('click', ev => {
@@ -280,17 +376,12 @@ app.addEventListener('click', ev => {
   if (a === 'tri') { ui.tri = +b.dataset.tri; ui.confirmar = null; ui.msg = null; render(); }
   else if (a === 'abrir') { ui.equipe = b.dataset.eq; ui.msg = null; ui.confirmar = null; render(); window.scrollTo(0, 0); }
   else if (a === 'voltar') { ui.equipe = null; ui.msg = null; render(); }
-  else if (a === 'editar') { ui.rascunho = JSON.parse(JSON.stringify(S)); ui.editando = true; ui.msg = null; render(); }
+  else if (a === 'editar' && podeEditar) { ui.rascunho = JSON.parse(JSON.stringify(S)); ui.editando = true; ui.msg = null; render(); }
   else if (a === 'cancelar') { ui.editando = false; ui.rascunho = null; ui.msg = null; render(); }
   else if (a === 'salvar') {
     if (app.querySelector('input.erro')) { const el = document.getElementById('aviso-ed'); if (el) { el.textContent = 'Corrija os campos marcados em vermelho antes de salvar.'; el.classList.add('erro'); } return; }
-    const E = JSON.parse(JSON.stringify(ui.rascunho));
-    salvar(E, 'Lançamento salvo.');
+    salvar(JSON.parse(JSON.stringify(ui.rascunho)), 'Lançamento salvo.');
   }
-  else if (a === 'abrir-login') { ui.login = true; ui.loginErro = null; render(); const el = document.getElementById('l-email'); if (el) el.focus(); }
-  else if (a === 'fechar-login') { ui.login = false; render(); }
-  else if (a === 'sair') { sb && sb.auth.signOut(); }
-  else if (a === 'recarregar') { erroCarga = null; render(); carregar(); }
   else if (a === 'pedir-fechar') { ui.confirmar = 'fechar'; render(); }
   else if (a === 'pedir-reabrir') { ui.confirmar = 'reabrir'; render(); }
   else if (a === 'cancelar-conf') { ui.confirmar = null; render(); }
@@ -299,6 +390,13 @@ app.addEventListener('click', ev => {
     E.trimestres[triChave()] = Object.assign({}, E.trimestres[triChave()], { fechado: a === 'fechar', fechadoEm: a === 'fechar' ? new Date().toISOString() : null });
     salvar(E, a === 'fechar' ? `${ui.tri}º trimestre fechado. Os prêmios agora são o resultado final.` : `${ui.tri}º trimestre reaberto.`);
   }
+  else if (a === 'ir-esqueci') { irPara('esqueci'); }
+  else if (a === 'ir-login') { irPara('login'); }
+  else if (a === 'trocar-senha') { if (ui.editando) { mostrar('Salve ou cancele o lançamento antes de trocar a senha.', true); return; } ui.trocaVoluntaria = true; irPara('nova-senha'); }
+  else if (a === 'cancelar-troca') { ui.trocaVoluntaria = false; ui.tela = 'app'; ui.authMsg = null; render(); }
+  else if (a === 'sair') { ui.authMsg = null; sb.auth.signOut(); }
+  else if (a === 'recarregar') { erroCarga = null; atualizarAcesso(); }
+  else if (a === 'backup') { baixarBackup(); }
 });
 
 app.addEventListener('input', ev => {
@@ -332,23 +430,74 @@ app.addEventListener('change', ev => {
 });
 
 app.addEventListener('submit', async ev => {
-  if (ev.target.id !== 'form-login') return;
   ev.preventDefault();
-  const email = document.getElementById('l-email').value.trim(), senha = document.getElementById('l-senha').value;
-  ui.email = email;
-  if (!email || !senha) { ui.loginErro = 'Preencha e-mail e senha.'; render(); return; }
-  ui.entrando = true; ui.loginErro = null; render();
-  const { error } = await sb.auth.signInWithPassword({ email, password: senha });
-  ui.entrando = false;
-  if (error) { ui.loginErro = 'E-mail ou senha incorretos.'; render(); return; }
-  ui.login = false;
+  const f = ev.target.id;
+
+  if (f === 'form-login') {
+    if (Date.now() < ui.bloqueadoAte) return;
+    const email = document.getElementById('l-email').value.trim().toLowerCase();
+    const senha = document.getElementById('l-senha').value;
+    ui.email = email;
+    if (!email || !senha) { irPara('login', 'Preencha e-mail e senha.', true); return; }
+    ui.enviando = true; ui.authMsg = null; render();
+    const { error } = await sb.auth.signInWithPassword({ email, password: senha });
+    ui.enviando = false;
+    if (error) {
+      ui.falhas++;
+      // Depois de 3 tentativas erradas, espera crescente antes de tentar de novo
+      if (ui.falhas >= 3) { const espera = Math.min(60, 5 * 2 ** (ui.falhas - 3)) * 1000; ui.bloqueadoAte = Date.now() + espera; setTimeout(render, espera + 50); }
+      const msg = /rate|too many/i.test(error.message || '') ? 'Muitas tentativas. Aguarde alguns minutos e tente de novo.' : 'E-mail ou senha incorretos.';
+      irPara('login', msg, true); return;
+    }
+    ui.falhas = 0; ui.authMsg = null;
+    return;
+  }
+
+  if (f === 'form-esqueci') {
+    const email = document.getElementById('e-email').value.trim().toLowerCase();
+    ui.email = email;
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) { irPara('esqueci', 'Digite um e-mail válido.', true); return; }
+    ui.enviando = true; ui.authMsg = null; render();
+    const destino = window.location.origin + window.location.pathname;
+    const { error } = await sb.auth.resetPasswordForEmail(email, { redirectTo: destino });
+    if (error && /rate|too many|seconds/i.test(error.message || '')) { irPara('esqueci', 'Já enviamos um link há pouco. Aguarde alguns minutos antes de pedir outro.', true); return; }
+    // Mesma resposta para e-mail cadastrado ou não, para não revelar quem tem conta
+    irPara('login', 'Se esse e-mail tiver acesso, você vai receber um link para criar uma nova senha. Confira também a caixa de spam.', false);
+    return;
+  }
+
+  if (f === 'form-senha') {
+    const s1 = document.getElementById('n-senha').value, s2 = document.getElementById('n-conf').value;
+    const fraca = senhaFraca(s1);
+    if (fraca) { irPara('nova-senha', fraca, true); return; }
+    if (s1 !== s2) { irPara('nova-senha', 'As duas senhas não são iguais.', true); return; }
+    if (!sessao) { irPara('login', 'O link expirou. Peça um novo em "Esqueci minha senha".', true); return; }
+    ui.enviando = true; ui.authMsg = null; render();
+    const { error } = await sb.auth.updateUser({ password: s1 });
+    ui.enviando = false;
+    if (error) {
+      const m = error.message || '';
+      const msg = /different from the old|same/i.test(m) ? 'A nova senha precisa ser diferente da anterior.'
+        : /weak|characters|length/i.test(m) ? 'Senha fraca. Use pelo menos ' + SENHA_MIN + ' caracteres, com letras e números.'
+        : /reauth|recent/i.test(m) ? 'Por segurança, saia e entre de novo antes de trocar a senha.'
+        : 'Não foi possível salvar a senha. Tente de novo.';
+      irPara('nova-senha', msg, true); return;
+    }
+    emRecuperacao = false; ui.trocaVoluntaria = false;
+    history.replaceState(null, '', window.location.pathname);
+    ui.tela = 'carregando';
+    await atualizarAcesso();
+    if (ui.tela === 'app') mostrar('Senha alterada com sucesso.', false);
+  }
 });
 
 render();
-carregar();
 if (sb) {
   sb.auth.onAuthStateChange((evento, s) => {
     sessao = s;
-    if (evento === 'INITIAL_SESSION' || evento === 'SIGNED_IN' || evento === 'SIGNED_OUT') setTimeout(verificarAdmin, 0);
+    if (evento === 'PASSWORD_RECOVERY') emRecuperacao = true;
+    if (evento === 'TOKEN_REFRESHED' || evento === 'USER_UPDATED') return;
+    // sair das chamadas do Supabase antes de consultar de novo (evita travar o cliente)
+    setTimeout(atualizarAcesso, 0);
   });
 }

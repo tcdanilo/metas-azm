@@ -141,9 +141,24 @@ tr.tot .obs{display:block;font-weight:400;font-size:12px;color:var(--ink-3);marg
 .rodape{margin-top:32px;color:var(--ink-3);font-size:12px;display:flex;gap:16px;flex-wrap:wrap;justify-content:space-between}
 @media (prefers-reduced-motion:reduce){*{transition:none!important}}
 
-/* login */
-.login{max-width:360px;margin:16px 0 0 auto;background:var(--surface);border:1px solid var(--line);border-radius:var(--r);padding:16px;display:flex;flex-direction:column;gap:6px}
-.login h3{margin:0 0 6px;font-family:var(--f-display);font-size:20px}
-.login label{font-size:13px;color:var(--ink-2)}
-.login input{padding:8px 10px;border:1px solid var(--line);border-radius:6px;background:var(--bg);font-size:15px}
-.login .acoes{justify-content:flex-end;margin-top:8px}
+/* telas de acesso (login, esqueci a senha, nova senha) */
+.acesso{min-height:100vh;min-height:100dvh;display:flex;align-items:center;justify-content:center;padding-block:32px}
+.ac-card{width:100%;max-width:400px;background:var(--surface);border:1px solid var(--line);border-radius:var(--r);padding:28px 24px;display:flex;flex-direction:column;gap:14px}
+.ac-card h1{font-family:var(--f-display);font-size:30px;margin:6px 0 0;line-height:1.1}
+.ac-card .aviso{margin:0}
+.ac-marca{display:flex;align-items:center;gap:12px;padding-bottom:14px;border-bottom:2px solid var(--ink)}
+.ac-logo{display:inline-flex;align-items:center;justify-content:center;width:46px;height:46px;border-radius:8px 8px 8px 18px;background:var(--tag);color:var(--tag-ink);border:1px solid var(--tag-line);font-family:var(--f-display);font-weight:700;font-size:18px}
+.ac-marca small{display:block;font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:var(--ink-2);font-weight:600}
+.ac-marca b{font-family:var(--f-display);font-size:22px}
+.ac-form{display:flex;flex-direction:column;gap:6px}
+.ac-form label{font-size:13px;color:var(--ink-2);font-weight:600;margin-top:6px}
+.ac-form input{padding:11px 12px;border:1px solid var(--line);border-radius:8px;background:var(--bg);font-size:16px;width:100%}
+.btn.largo{width:100%;padding:12px 14px;margin-top:12px;font-size:15px}
+.link{background:none;border:0;padding:0;color:var(--navy);font-weight:600;cursor:pointer;font-size:14px;text-align:left;text-decoration:underline;text-underline-offset:3px}
+.aviso.ok{color:var(--ok)}
+.rod-conta{display:flex;gap:6px 14px;flex-wrap:wrap;align-items:center}
+.rod-conta .link{font-size:12px}
+/* utilitários que substituem estilos inline (exigência da política de segurança) */
+.etq.etq-txt{font-size:15px}
+.pill.nm{margin:0}
+.tri-res{display:flex;gap:12px;align-items:center;flex-wrap:wrap}
