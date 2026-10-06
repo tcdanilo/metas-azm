@@ -125,8 +125,9 @@ function colabPaginaHTML(E) {
   const ativos = COLAB.filter(c => c.ativo);
   const total = ativos.reduce((a, c) => a + (premios[c.equipe] || 0), 0);
   let h = `<div class="det-top"><div><h2>Colaboradores</h2><p class="aviso">Cada colaborador recebe o prêmio inteiro da sua meta. ${podeEditar ? 'CPF, e-mail e celular só aparecem para quem pode lançar.' : ''}</p></div>
-    <div class="acoes">${semPremio ? '' : `<span class="tot-colab">${ui.tri}º tri · total a pagar ${etq(total, 'm')}</span>`}${podeEditar && !ui.colabForm ? '<button class="btn prim" data-acao="colab-novo">Novo colaborador</button>' : ''}</div></div>`;
+    <div class="acoes">${semPremio ? '' : `<span class="tot-colab">${ui.tri}º tri · total a pagar ${etq(total, 'm')}</span>`}${podeEditar && !ui.colabForm && !semPremio && COLAB.length ? '<button class="btn" data-acao="ticket-prev">Exportar para Ticket</button>' : ''}${podeEditar && !ui.colabForm ? '<button class="btn prim" data-acao="colab-novo">Novo colaborador</button>' : ''}</div></div>`;
   if (colabErro) return h + `<p class="aviso erro" role="alert">${esc(colabErro)}</p>`;
+  if (ui.ticketPrev && podeEditar) h += ticketPreviaHTML(E);
   if (ui.colabForm) h += formColabHTML(E);
   if (ui.colabExcluir) {
     const c = COLAB.find(x => x.id === ui.colabExcluir);
@@ -179,4 +180,101 @@ function lerFormColab() {
     equipe: document.getElementById('c-equipe').value,
     ativo: document.getElementById('c-ativo').checked
   };
+}
+
+/* ===== Exportação para a Ticket =====
+   Usa o modelo oficial (modelo-ticket.xlsx) e só preenche as colunas A–E da aba "Premiados",
+   mantendo todo o resto do arquivo igual. Um arquivo por meta (loja + setor). */
+function semAcento(s) { return String(s || '').normalize('NFD').replace(/[̀-ͯ]/g, ''); }
+function xmlEsc(s) { return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;'); }
+function valorTicket(v) { return Number.isInteger(v) ? String(v) : v.toFixed(2).replace('.', ','); }
+
+function planoTicket(E) {
+  const premios = premioPorEquipe(E);
+  const arquivos = [], fora = [];
+  equipes(E).forEach(eq => {
+    const pessoas = colabDaEquipe(eq.nome);
+    const v = premios[eq.nome] || 0;
+    if (!pessoas.length && !v) return;
+    if (!pessoas.length) fora.push(`${eq.nome}: nenhum colaborador cadastrado`);
+    else if (!v) fora.push(`${eq.nome}: prêmio de R$ 0 no ${ui.tri}º tri`);
+    else arquivos.push({ equipe: eq.nome, valor: v, pessoas });
+  });
+  return { arquivos, fora };
+}
+
+function ticketPreviaHTML(E) {
+  const { arquivos, fora } = planoTicket(E);
+  const parcial = !triFechado();
+  const longos = arquivos.flatMap(a => a.pessoas).filter(c => semAcento(c.nome).length > 40);
+  return `<section class="colab-form ticket-prev"><h3>Exportar para a Ticket · ${ui.tri}º trimestre</h3>
+    ${parcial ? `<p class="aviso erro">O ${ui.tri}º trimestre ainda não foi fechado: os valores são parciais. O ideal é fechar o trimestre antes de exportar.</p>` : ''}
+    ${arquivos.length ? `<p class="aviso">Serão gerados ${arquivos.length} ${arquivos.length === 1 ? 'arquivo' : 'arquivos'} no modelo da Ticket, um por meta:</p>
+    <div class="rol"><table class="t-colab"><thead><tr><th>Arquivo</th><th>Pessoas</th><th>Crédito por pessoa</th><th>Total</th></tr></thead><tbody>
+    ${arquivos.map(a => `<tr><td>${esc(nomeArquivoTicket(a.equipe))}</td><td class="num">${a.pessoas.length}</td><td class="num">${brl(a.valor)}</td><td class="num">${brl(a.valor * a.pessoas.length)}</td></tr>`).join('')}
+    </tbody></table></div>` : '<p class="aviso erro">Nenhuma meta tem prêmio e colaboradores neste trimestre.</p>'}
+    ${fora.length ? `<p class="aviso">Fora da exportação: ${fora.map(esc).join(' · ')}.</p>` : ''}
+    ${longos.length ? `<p class="aviso erro">Nome com mais de 40 caracteres (a Ticket pode recusar): ${longos.map(c => esc(c.nome)).join(', ')}.</p>` : ''}
+    <div class="acoes"><button class="btn" data-acao="ticket-cancelar">Cancelar</button>${arquivos.length ? `<button class="btn prim" data-acao="ticket-baixar" ${ui.ticketGerando ? 'disabled' : ''}>${ui.ticketGerando ? 'Gerando…' : 'Baixar ' + (arquivos.length === 1 ? 'arquivo' : 'arquivos')}</button>` : ''}</div>
+  </section>`;
+}
+
+function nomeArquivoTicket(equipe) {
+  return `ticket premiação ${semAcento(equipe).toLowerCase()} ${ui.tri}tri${S.ano}.xlsx`;
+}
+
+async function gerarArquivoTicket(modelo, arq) {
+  const zip = await JSZip.loadAsync(modelo);
+  let sst = await zip.file('xl/sharedStrings.xml').async('string');
+  let sh = await zip.file('xl/worksheets/sheet1.xml').async('string');
+  let n = (sst.match(/<si>/g) || []).length, usados = 0;
+  const novos = [];
+  const str = t => { novos.push(/^\s|\s$/.test(t) ? `<si><t xml:space="preserve">${xmlEsc(t)}</t></si>` : `<si><t>${xmlEsc(t)}</t></si>`); usados++; return n++; };
+  arq.pessoas.forEach((c, i) => {
+    const r = 3 + i;
+    const valores = {
+      A: soDigitos(c.cpf).padStart(11, '0'),
+      B: semAcento(c.nome).toUpperCase().replace(/\s+/g, ' ').trim(),
+      C: (c.email || '').trim().toLowerCase(),
+      D: soDigitos(c.celular || ''),
+      E: valorTicket(arq.valor)
+    };
+    Object.entries(valores).forEach(([col, v]) => {
+      if (!v) return;
+      const re = new RegExp(`<c r="${col}${r}" s="(\\d+)"/>`);
+      if (!re.test(sh)) throw new Error('modelo: célula ' + col + r + ' não encontrada');
+      const idx = str(v);
+      sh = sh.replace(re, `<c r="${col}${r}" s="$1" t="s"><v>${idx}</v></c>`);
+    });
+  });
+  sst = sst.replace('</sst>', novos.join('') + '</sst>')
+    .replace(/uniqueCount="\d+"/, `uniqueCount="${n}"`)
+    .replace(/ count="(\d+)"/, (m, c) => ` count="${+c + usados}"`);
+  zip.file('xl/sharedStrings.xml', sst, { createFolders: false });
+  zip.file('xl/worksheets/sheet1.xml', sh, { createFolders: false });
+  return zip.generateAsync({ type: 'blob', compression: 'DEFLATE', mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+}
+
+async function baixarTicket(E) {
+  const { arquivos } = planoTicket(E);
+  if (!arquivos.length || typeof JSZip === 'undefined') return;
+  ui.ticketGerando = true; render();
+  try {
+    const resp = await fetch('modelo-ticket.xlsx', { cache: 'no-store' });
+    if (!resp.ok) throw new Error('modelo não encontrado');
+    const modelo = await resp.arrayBuffer();
+    for (const arq of arquivos) {
+      const blob = await gerarArquivoTicket(modelo, arq);
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob); a.download = nomeArquivoTicket(arq.equipe);
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+      await new Promise(r => setTimeout(r, 600));
+    }
+    ui.ticketPrev = false; ui.ticketGerando = false;
+    mostrar(`${arquivos.length} ${arquivos.length === 1 ? 'arquivo gerado' : 'arquivos gerados'} para a Ticket. Se o navegador perguntar, permita baixar vários arquivos.`, false);
+  } catch (e) {
+    ui.ticketGerando = false;
+    mostrar('Não foi possível gerar os arquivos da Ticket (' + e.message + '). Confira se o modelo-ticket.xlsx foi enviado para o site.', true);
+  }
 }

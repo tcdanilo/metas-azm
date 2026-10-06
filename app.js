@@ -28,7 +28,7 @@ const ui = {
   email: '', authMsg: erroLink ? (/expired|expirou/i.test(erroLink) ? 'O link expirou ou já foi usado. Peça um novo em "Esqueci minha senha".' : 'O link não é válido. Peça um novo em "Esqueci minha senha".') : null,
   authErro: !!erroLink, enviando: false, trocaVoluntaria: false,
   falhas: 0, bloqueadoAte: 0,
-  pagina: 'metas', colabForm: null, colabExcluir: null, colabBusca: ''
+  pagina: 'metas', colabForm: null, colabExcluir: null, colabBusca: '', ticketPrev: false, ticketGerando: false
 };
 
 /* ---------- formatação ---------- */
@@ -413,6 +413,9 @@ app.addEventListener('click', ev => {
   else if (a === 'colab-pedir-excluir') { ui.colabExcluir = b.dataset.id; ui.colabForm = null; render(); window.scrollTo(0, 0); }
   else if (a === 'colab-cancelar-excluir') { ui.colabExcluir = null; render(); }
   else if (a === 'colab-excluir' && podeEditar) { excluirColab(b.dataset.id); }
+  else if (a === 'ticket-prev' && podeEditar) { ui.ticketPrev = true; ui.colabForm = null; ui.colabExcluir = null; ui.msg = null; render(); window.scrollTo(0, 0); }
+  else if (a === 'ticket-cancelar') { ui.ticketPrev = false; render(); }
+  else if (a === 'ticket-baixar' && podeEditar) { baixarTicket(S); }
 });
 
 app.addEventListener('input', ev => {

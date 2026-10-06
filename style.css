@@ -195,3 +195,4 @@ table.t-colab{min-width:640px}
 .t-colab tr.inativo td{color:var(--ink-3)}
 .colab-acoes{display:flex;gap:12px;justify-content:flex-end;white-space:nowrap}
 .link.perigo{color:var(--bad)}
+.ticket-prev .aviso{margin:0}
