@@ -28,7 +28,7 @@ const ui = {
   email: '', authMsg: erroLink ? (/expired|expirou/i.test(erroLink) ? 'O link expirou ou já foi usado. Peça um novo em "Esqueci minha senha".' : 'O link não é válido. Peça um novo em "Esqueci minha senha".') : null,
   authErro: !!erroLink, enviando: false, trocaVoluntaria: false,
   falhas: 0, bloqueadoAte: 0,
-  pagina: 'metas', colabForm: null, colabExcluir: null, colabBusca: '', ticketPrev: false, ticketGerando: false
+  pagina: 'metas', colabForm: null, colabExcluir: null, colabBusca: '', ticketPrev: false, ticketGerando: false, impPrev: false
 };
 
 /* ---------- formatação ---------- */
@@ -119,7 +119,8 @@ function resumoHTML(E) {
     ${triSemPremio() ? `<div class="total"><span>Prêmios</span><b>Sem prêmio</b><em>As metas com prêmio começaram no 3º trimestre</em></div>` : `<div class="total"><span>${fechado ? 'Total pago no trimestre' : 'Total a pagar até agora'}</span><b class="num">${brl(totalPagar)}</b><em>${colabErro ? 'Cadastre os colaboradores para ver o total' : pessoas + (pessoas === 1 ? ' colaborador' : ' colaboradores') + (semGente ? ' · ' + semGente + (semGente === 1 ? ' meta sem colaborador' : ' metas sem colaborador') : '')}</em></div>`}
     <div class="total"><span>Metas batidas</span><b class="num">${ok} de ${aval}</b><em>${aval ? nf(ok / aval * 100, 0, 0) + '% das metas já apuradas' : 'Nenhuma meta apurada ainda'}</em></div>
     <div class="total"><span>Lançamento dos meses</span><b class="num">${lanc.filter(l => l.t && l.n === l.t).length} de 3</b><em>${lanc.map(l => `${MESES[l.m - 1]} ${l.t ? l.n + '/' + l.t : '—'}`).join(' · ')}</em></div></section>`;
-  h += `<div class="sec-tit"><h2>Equipes</h2><div class="legenda"><span><i class="dot ok"></i>batida</span><span><i class="dot nao"></i>não batida</span><span><i class="dot"></i>aguardando</span><span><i class="dot sem"></i>sem meta</span></div></div>`;
+  if (ui.impPrev) h += impPainelHTML(E);
+  h += `<div class="sec-tit"><h2>Equipes</h2>${ui.impPrev ? '' : '<button class="btn" data-acao="imp-abrir">Imprimir metas</button>'}<div class="legenda"><span><i class="dot ok"></i>batida</span><span><i class="dot nao"></i>não batida</span><span><i class="dot"></i>aguardando</span><span><i class="dot sem"></i>sem meta</span></div></div>`;
   const ord = [...res].sort((a, b) => (b.temMeta - a.temMeta));
   h += `<div class="grade">${ord.map(r => cardHTML(r)).join('')}</div>`;
   return h;
@@ -151,7 +152,7 @@ function detalheHTML(E) {
   const fechado = triFechado();
   let h = `<button class="voltar" data-acao="voltar" ${ui.editando ? 'disabled' : ''}>← Todas as equipes</button>
     <div class="det-top"><div><h2>${esc(eq.nome)}</h2><p class="aviso">${esc(lojasDe(eq))} · ${fechado ? 'prêmio final' : 'prêmio previsto'} por pessoa no ${ui.tri}º trimestre</p></div>
-    <div class="acoes"><span id="tot-eq">${etq(r.premio, 'g')}</span>${podeEditar && !ui.editando && !fechado ? `<button class="btn prim" data-acao="editar">Lançar resultados e metas</button>` : ''}</div></div>`;
+    <div class="acoes"><span id="tot-eq">${etq(r.premio, 'g')}</span>${ui.editando ? '' : `<button class="btn" data-acao="imp-equipe" data-eq="${esc(eq.nome)}">Imprimir</button>`}${podeEditar && !ui.editando && !fechado ? `<button class="btn prim" data-acao="editar">Lançar resultados e metas</button>` : ''}</div></div>`;
   if (podeEditar && fechado && !ui.editando) h += `<p class="aviso">Trimestre fechado. Para corrigir um lançamento, reabra o trimestre na tela inicial.</p>`;
   if (!ui.editando) h += colabNaEquipeHTML(eq.nome, r.premio);
   r.progs.forEach(p => { h += programaHTML(E, p); });
@@ -416,6 +417,11 @@ app.addEventListener('click', ev => {
   else if (a === 'ticket-prev' && podeEditar) { ui.ticketPrev = true; ui.colabForm = null; ui.colabExcluir = null; ui.msg = null; render(); window.scrollTo(0, 0); }
   else if (a === 'ticket-cancelar') { ui.ticketPrev = false; render(); }
   else if (a === 'ticket-baixar' && podeEditar) { baixarTicket(S); }
+  else if (a === 'imp-abrir') { ui.impPrev = true; ui.msg = null; render(); }
+  else if (a === 'imp-cancelar') { ui.impPrev = false; render(); }
+  else if (a === 'imp-todas' || a === 'imp-nenhuma') { app.querySelectorAll('.imp-eq').forEach(c => { c.checked = a === 'imp-todas'; }); }
+  else if (a === 'imp-imprimir') { imprimirEquipes([...app.querySelectorAll('.imp-eq:checked')].map(c => c.value)); }
+  else if (a === 'imp-equipe') { imprimirEquipes([b.dataset.eq]); }
 });
 
 app.addEventListener('input', ev => {
